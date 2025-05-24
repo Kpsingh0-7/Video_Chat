@@ -4,14 +4,16 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [status, setStatus] = useState("Connecting...");
   const [input, setInput] = useState("");
+
   const socketRef = useRef(null);
   const localVideoRef = useRef();
   const remoteVideoRef = useRef();
   const localStreamRef = useRef();
   const peerRef = useRef(null);
+  const pendingCandidatesRef = useRef([]); // ✅ Added missing ref
 
   useEffect(() => {
-    const socket = new WebSocket("https://viseo-chat.onrender.com/");
+    const socket = new WebSocket("wss://viseo-chat.onrender.com/"); // Make sure WebSocket URL is correct
     socketRef.current = socket;
 
     socket.onopen = () => setStatus("Looking for a partner...");
@@ -22,7 +24,7 @@ export default function App() {
       if (data.type === "paired") {
         setStatus("Connected to a stranger.");
         setMessages([]);
-        startMediaAndConnection(true);
+        await startMediaAndConnection(true);
       } else if (data.type === "chat") {
         setMessages((msgs) => [...msgs, { text: data.message, from: "stranger" }]);
       } else if (data.type === "partner-disconnected") {
@@ -48,14 +50,17 @@ export default function App() {
     localVideoRef.current.srcObject = stream;
 
     const pc = new RTCPeerConnection();
+
     stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
     pc.ontrack = (event) => {
+      console.log("✅ Received remote stream");
       remoteVideoRef.current.srcObject = event.streams[0];
     };
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
+        console.log("📤 Sending ICE candidate");
         socketRef.current.send(JSON.stringify({ type: "signal", signal: { candidate: e.candidate } }));
       }
     };
@@ -70,51 +75,54 @@ export default function App() {
   };
 
   const handleSignal = async (signal) => {
-  const pc = peerRef.current;
+    const pc = peerRef.current;
 
-  if (signal.offer) {
-    await startMediaAndConnection(false); // ensures peerRef is set
-    await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    socketRef.current.send(JSON.stringify({ type: "signal", signal: { answer } }));
+    if (signal.offer) {
+      console.log("📥 Received offer");
+      await startMediaAndConnection(false);
+      await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socketRef.current.send(JSON.stringify({ type: "signal", signal: { answer } }));
 
-    // Add any ICE candidates that were received before the offer
-    pendingCandidatesRef.current.forEach(async (candidate) => {
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (err) {
-        console.error("Delayed ICE error:", err);
+      // Process queued ICE candidates
+      for (const candidate of pendingCandidatesRef.current) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          console.error("⚠️ Error adding queued ICE candidate:", err);
+        }
       }
-    });
-    pendingCandidatesRef.current = [];
+      pendingCandidatesRef.current = [];
 
-  } else if (signal.answer) {
-    await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+    } else if (signal.answer) {
+      console.log("📥 Received answer");
+      await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
 
-    // Add queued candidates now
-    pendingCandidatesRef.current.forEach(async (candidate) => {
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (err) {
-        console.error("Delayed ICE error:", err);
+      // Process queued ICE candidates
+      for (const candidate of pendingCandidatesRef.current) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          console.error("⚠️ Error adding queued ICE candidate:", err);
+        }
       }
-    });
-    pendingCandidatesRef.current = [];
+      pendingCandidatesRef.current = [];
 
-  } else if (signal.candidate) {
-    if (pc.remoteDescription) {
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-      } catch (err) {
-        console.error("ICE error:", err);
+    } else if (signal.candidate) {
+      console.log("📥 Received ICE candidate");
+      if (pc.remoteDescription) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        } catch (err) {
+          console.error("⚠️ Error adding ICE candidate:", err);
+        }
+      } else {
+        console.log("🕓 Queuing ICE candidate until remote description is set");
+        pendingCandidatesRef.current.push(signal.candidate);
       }
-    } else {
-      pendingCandidatesRef.current.push(signal.candidate); // queue it
     }
-  }
-};
-
+  };
 
   const sendMessage = () => {
     if (input.trim()) {
@@ -143,6 +151,7 @@ export default function App() {
       localStreamRef.current.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
     }
+    pendingCandidatesRef.current = []; // Clear candidate queue
   };
 
   return (
@@ -151,8 +160,8 @@ export default function App() {
       <p className="mb-4">{status}</p>
 
       <div className="flex gap-4 mb-4">
-        <video ref={localVideoRef} autoPlay muted className="w-1/2 rounded shadow" />
-        <video ref={remoteVideoRef} autoPlay className="w-1/2 rounded shadow" />
+        <video ref={localVideoRef} autoPlay muted playsInline className="w-1/2 rounded shadow" />
+        <video ref={remoteVideoRef} autoPlay playsInline className="w-1/2 rounded shadow" />
       </div>
 
       <div className="w-full max-w-md bg-gray-800 p-4 rounded shadow mb-4 h-64 overflow-y-auto">
