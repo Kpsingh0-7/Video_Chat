@@ -13,13 +13,19 @@ export default function App() {
   const pendingCandidatesRef = useRef([]);
 
   useEffect(() => {
-    const socket = new WebSocket("wss://viseo-chat.onrender.com/");
+    if (socketRef.current) return;
+
+    const socket = new WebSocket("ws://localhost:8080");
     socketRef.current = socket;
 
-    socket.onopen = () => setStatus("Looking for a partner...");
+    socket.onopen = () => {
+      console.log("WebSocket connected");
+      setStatus("Looking for a partner...");
+    };
 
     socket.onmessage = async (event) => {
       const data = JSON.parse(event.data);
+      console.log("WS message:", data);
 
       if (data.type === "paired") {
         setStatus("Connected to a stranger.");
@@ -35,9 +41,20 @@ export default function App() {
       }
     };
 
-    socket.onclose = () => setStatus("Disconnected from server.");
+    socket.onclose = () => {
+      console.log("WebSocket disconnected");
+      setStatus("Disconnected from server.");
+    };
 
-    return () => socket.close();
+    socket.onerror = (e) => {
+      console.error("WebSocket error", e);
+    };
+
+    return () => {
+      socket.close();
+      socketRef.current = null;
+      cleanupConnection();
+    };
   }, []);
 
   const createPeerConnection = (stream) => {
@@ -46,32 +63,52 @@ export default function App() {
     stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
     pc.ontrack = (event) => {
-      console.log("✅ Received remote stream");
-      remoteVideoRef.current.srcObject = event.streams[0];
+      console.log("Received remote stream");
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+      }
     };
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
-        console.log("📤 Sending ICE candidate");
+        console.log("Sending ICE candidate");
         socketRef.current.send(JSON.stringify({ type: "signal", signal: { candidate: e.candidate } }));
       }
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log("Connection state:", pc.connectionState);
+      if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+        cleanupConnection();
+        setStatus("Stranger disconnected. Looking for a new one...");
+        socketRef.current.send(JSON.stringify({ type: "next" }));
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log("ICE connection state:", pc.iceConnectionState);
     };
 
     return pc;
   };
 
   const startMediaAndConnection = async (createOffer) => {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    localStreamRef.current = stream;
-    localVideoRef.current.srcObject = stream;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStreamRef.current = stream;
+      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
-    const pc = createPeerConnection(stream);
-    peerRef.current = pc;
+      const pc = createPeerConnection(stream);
+      peerRef.current = pc;
 
-    if (createOffer) {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socketRef.current.send(JSON.stringify({ type: "signal", signal: { offer } }));
+      if (createOffer) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socketRef.current.send(JSON.stringify({ type: "signal", signal: { offer } }));
+      }
+    } catch (err) {
+      console.error("Error accessing media devices:", err);
+      setStatus("Could not access camera/microphone.");
     }
   };
 
@@ -79,55 +116,62 @@ export default function App() {
     let pc = peerRef.current;
 
     if (signal.offer) {
-      console.log("📥 Received offer");
+      console.log("Received offer");
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      localStreamRef.current = stream;
-      localVideoRef.current.srcObject = stream;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localStreamRef.current = stream;
+        if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
-      pc = createPeerConnection(stream);
-      peerRef.current = pc;
+        pc = createPeerConnection(stream);
+        peerRef.current = pc;
 
-      await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      socketRef.current.send(JSON.stringify({ type: "signal", signal: { answer } }));
-
-      // Process queued ICE candidates
-      for (const candidate of pendingCandidatesRef.current) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (err) {
-          console.error("⚠️ Error adding queued ICE candidate:", err);
-        }
-      }
-      pendingCandidatesRef.current = [];
-
-    } else if (signal.answer) {
-      console.log("📥 Received answer");
-      if (pc) {
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+        await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socketRef.current.send(JSON.stringify({ type: "signal", signal: { answer } }));
 
         for (const candidate of pendingCandidatesRef.current) {
           try {
             await pc.addIceCandidate(new RTCIceCandidate(candidate));
           } catch (err) {
-            console.error("⚠️ Error adding queued ICE candidate:", err);
+            console.error("Error adding queued ICE candidate:", err);
           }
         }
         pendingCandidatesRef.current = [];
+      } catch (err) {
+        console.error("Error handling offer signal:", err);
       }
+    } else if (signal.answer) {
+      console.log("Received answer");
+      if (pc && pc.signalingState === "have-local-offer") {
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+        } catch (err) {
+          console.error("Error setting remote answer:", err);
+        }
 
+        for (const candidate of pendingCandidatesRef.current) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (err) {
+            console.error("Error adding queued ICE candidate:", err);
+          }
+        }
+        pendingCandidatesRef.current = [];
+      } else {
+        console.warn("Ignoring remote answer, signalingState:", pc?.signalingState);
+      }
     } else if (signal.candidate) {
-      console.log("📥 Received ICE candidate");
-      if (pc?.remoteDescription?.type) {
+      console.log("Received ICE candidate");
+      if (pc && pc.remoteDescription && pc.remoteDescription.type) {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
         } catch (err) {
-          console.error("⚠️ Error adding ICE candidate:", err);
+          console.error("Error adding ICE candidate:", err);
         }
       } else {
-        console.log("🕓 Queuing ICE candidate until remote description is set");
+        console.log("Queuing ICE candidate until remote description set");
         pendingCandidatesRef.current.push(signal.candidate);
       }
     }
@@ -135,7 +179,7 @@ export default function App() {
 
   const sendMessage = () => {
     if (input.trim()) {
-      setMessages([...messages, { text: input, from: "me" }]);
+      setMessages((msgs) => [...msgs, { text: input, from: "me" }]);
       socketRef.current.send(JSON.stringify({ type: "chat", message: input }));
       setInput("");
     }
@@ -175,7 +219,10 @@ export default function App() {
 
       <div className="w-full max-w-md bg-gray-800 p-4 rounded shadow mb-4 h-64 overflow-y-auto">
         {messages.map((msg, idx) => (
-          <p key={idx} className={msg.from === "me" ? "text-right text-green-400" : "text-left text-blue-300"}>
+          <p
+            key={idx}
+            className={msg.from === "me" ? "text-right text-green-400" : "text-left text-blue-300"}
+          >
             {msg.from === "me" ? "You: " : "Stranger: "} {msg.text}
           </p>
         ))}
@@ -189,9 +236,14 @@ export default function App() {
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
           placeholder="Type a message"
         />
-        <button onClick={sendMessage} className="bg-blue-600 px-4 rounded hover:bg-blue-700">Send</button>
-        <button onClick={handleNext} className="bg-red-600 px-4 rounded hover:bg-red-700">Next</button>
+        <button onClick={sendMessage} className="bg-blue-600 px-4 rounded hover:bg-blue-700">
+          Send
+        </button>
+        <button onClick={handleNext} className="bg-red-600 px-4 rounded hover:bg-red-700">
+          Next
+        </button>
       </div>
     </div>
   );
 }
+
