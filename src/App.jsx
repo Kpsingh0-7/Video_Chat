@@ -4,6 +4,7 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [status, setStatus] = useState("Connecting...");
   const [input, setInput] = useState("");
+  const [iceServers, setIceServers] = useState([]);
 
   const socketRef = useRef(null);
   const localVideoRef = useRef();
@@ -11,6 +12,23 @@ export default function App() {
   const localStreamRef = useRef();
   const peerRef = useRef(null);
   const pendingCandidatesRef = useRef([]);
+
+  // Fetch ICE servers from backend on mount
+  useEffect(() => {
+    async function fetchIceServers() {
+      try {
+        const res = await fetch("https://viseo-chat.onrender.com/ice");
+        const data = await res.json();
+        if (data.iceServers) {
+          setIceServers(data.iceServers);
+          console.log("Fetched ICE servers:", data.iceServers);
+        }
+      } catch (err) {
+        console.error("Failed to fetch ICE servers:", err);
+      }
+    }
+    fetchIceServers();
+  }, []);
 
   useEffect(() => {
     if (socketRef.current) return;
@@ -58,7 +76,15 @@ export default function App() {
   }, []);
 
   const createPeerConnection = (stream) => {
-    const pc = new RTCPeerConnection();
+    if (!iceServers.length) {
+      console.warn("No ICE servers available, using default STUN only.");
+    }
+
+    const pc = new RTCPeerConnection({
+      iceServers: iceServers.length
+        ? iceServers
+        : [{ urls: "stun:stun.l.google.com:19302" }],
+    });
 
     stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
@@ -72,7 +98,9 @@ export default function App() {
     pc.onicecandidate = (e) => {
       if (e.candidate) {
         console.log("Sending ICE candidate");
-        socketRef.current.send(JSON.stringify({ type: "signal", signal: { candidate: e.candidate } }));
+        socketRef.current.send(
+          JSON.stringify({ type: "signal", signal: { candidate: e.candidate } })
+        );
       }
     };
 
@@ -94,7 +122,10 @@ export default function App() {
 
   const startMediaAndConnection = async (createOffer) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
       localStreamRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
@@ -119,7 +150,10 @@ export default function App() {
       console.log("Received offer");
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true,
+        });
         localStreamRef.current = stream;
         if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
@@ -213,15 +247,28 @@ export default function App() {
       <p className="mb-4">{status}</p>
 
       <div className="flex gap-4 mb-4">
-        <video ref={localVideoRef} autoPlay muted playsInline className="w-1/2 rounded shadow" />
-        <video ref={remoteVideoRef} autoPlay playsInline className="w-1/2 rounded shadow" />
+        <video
+          ref={localVideoRef}
+          autoPlay
+          muted
+          playsInline
+          className="w-1/2 rounded shadow"
+        />
+        <video
+          ref={remoteVideoRef}
+          autoPlay
+          playsInline
+          className="w-1/2 rounded shadow"
+        />
       </div>
 
       <div className="w-full max-w-md bg-gray-800 p-4 rounded shadow mb-4 h-64 overflow-y-auto">
         {messages.map((msg, idx) => (
           <p
             key={idx}
-            className={msg.from === "me" ? "text-right text-green-400" : "text-left text-blue-300"}
+            className={
+              msg.from === "me" ? "text-right text-green-400" : "text-left text-blue-300"
+            }
           >
             {msg.from === "me" ? "You: " : "Stranger: "} {msg.text}
           </p>
@@ -236,14 +283,19 @@ export default function App() {
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
           placeholder="Type a message"
         />
-        <button onClick={sendMessage} className="bg-blue-600 px-4 rounded hover:bg-blue-700">
+        <button
+          onClick={sendMessage}
+          className="bg-blue-600 px-4 rounded hover:bg-blue-700"
+        >
           Send
         </button>
-        <button onClick={handleNext} className="bg-red-600 px-4 rounded hover:bg-red-700">
+        <button
+          onClick={handleNext}
+          className="bg-red-600 px-4 rounded hover:bg-red-700"
+        >
           Next
         </button>
       </div>
     </div>
   );
 }
-
