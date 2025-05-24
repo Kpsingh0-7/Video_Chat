@@ -10,10 +10,10 @@ export default function App() {
   const remoteVideoRef = useRef();
   const localStreamRef = useRef();
   const peerRef = useRef(null);
-  const pendingCandidatesRef = useRef([]); // ✅ Added missing ref
+  const pendingCandidatesRef = useRef([]);
 
   useEffect(() => {
-    const socket = new WebSocket("wss://viseo-chat.onrender.com/"); // Make sure WebSocket URL is correct
+    const socket = new WebSocket("wss://viseo-chat.onrender.com/");
     socketRef.current = socket;
 
     socket.onopen = () => setStatus("Looking for a partner...");
@@ -35,20 +35,12 @@ export default function App() {
       }
     };
 
-    socket.onclose = () => {
-      setStatus("Disconnected from server.");
-    };
+    socket.onclose = () => setStatus("Disconnected from server.");
 
-    return () => {
-      socket.close();
-    };
+    return () => socket.close();
   }, []);
 
-  const startMediaAndConnection = async (createOffer) => {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    localStreamRef.current = stream;
-    localVideoRef.current.srcObject = stream;
-
+  const createPeerConnection = (stream) => {
     const pc = new RTCPeerConnection();
 
     stream.getTracks().forEach((track) => pc.addTrack(track, stream));
@@ -65,6 +57,15 @@ export default function App() {
       }
     };
 
+    return pc;
+  };
+
+  const startMediaAndConnection = async (createOffer) => {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    localStreamRef.current = stream;
+    localVideoRef.current.srcObject = stream;
+
+    const pc = createPeerConnection(stream);
     peerRef.current = pc;
 
     if (createOffer) {
@@ -75,11 +76,18 @@ export default function App() {
   };
 
   const handleSignal = async (signal) => {
-    const pc = peerRef.current;
+    let pc = peerRef.current;
 
     if (signal.offer) {
       console.log("📥 Received offer");
-      await startMediaAndConnection(false);
+
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStreamRef.current = stream;
+      localVideoRef.current.srcObject = stream;
+
+      pc = createPeerConnection(stream);
+      peerRef.current = pc;
+
       await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -97,21 +105,22 @@ export default function App() {
 
     } else if (signal.answer) {
       console.log("📥 Received answer");
-      await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+      if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
 
-      // Process queued ICE candidates
-      for (const candidate of pendingCandidatesRef.current) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (err) {
-          console.error("⚠️ Error adding queued ICE candidate:", err);
+        for (const candidate of pendingCandidatesRef.current) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (err) {
+            console.error("⚠️ Error adding queued ICE candidate:", err);
+          }
         }
+        pendingCandidatesRef.current = [];
       }
-      pendingCandidatesRef.current = [];
 
     } else if (signal.candidate) {
       console.log("📥 Received ICE candidate");
-      if (pc.remoteDescription) {
+      if (pc?.remoteDescription?.type) {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
         } catch (err) {
@@ -151,7 +160,7 @@ export default function App() {
       localStreamRef.current.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
     }
-    pendingCandidatesRef.current = []; // Clear candidate queue
+    pendingCandidatesRef.current = [];
   };
 
   return (
