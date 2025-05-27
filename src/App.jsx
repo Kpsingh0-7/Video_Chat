@@ -8,54 +8,71 @@ export default function App() {
   const [peer, setPeer] = useState([]);
 
   const socketRef = useRef();
-  const peerConnectionRef = useRef();
-  const localStreamRef = useRef();
-  const localVideoRef = useRef();
-  const remoteVideoRef = useRef();
+  const peerConnectionRef = useRef(null);
+  const localStreamRef = useRef(null);
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
 
   useEffect(() => {
-    // Start local video first
-    startLocalVideo();
+    const init = async () => {
+      await startLocalVideo();
 
-    // Then setup socket
-    socketRef.current = io("https://viseo-chat.onrender.com");
+      socketRef.current = io("http://localhost:8080");
 
-    socketRef.current.on("joined", (users) => {
-      setAllUsers(users);
-    });
+      socketRef.current.on("joined", (users) => {
+        setAllUsers(users);
+      });
 
-    socketRef.current.on("offer", async ({ from, to, offer }) => {
-      const pc = getPeerConnection(from);
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      socketRef.current.emit("answer", { from: to, to: from, answer });
-      setPeer([from, to]);
-    });
-
-    socketRef.current.on("answer", async ({ from, to, answer }) => {
-      const pc = getPeerConnection(to);
-      await pc.setRemoteDescription(new RTCSessionDescription(answer));
-      setPeer([from, to]);
-    });
-
-    socketRef.current.on("icecandidate", async (candidate) => {
-      if (candidate) {
-        try {
-          const pc = peerConnectionRef.current;
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (err) {
-          console.error("ICE candidate error:", err);
+      socketRef.current.on("offer", async ({ from, to, offer }) => {
+        if (peerConnectionRef.current) {
+          socketRef.current.emit("call-busy", { to: from });
+          return;
         }
-      }
-    });
+        const pc = createPeerConnection(from);
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socketRef.current.emit("answer", { from: to, to: from, answer });
+        setPeer([from, to]);
+      });
 
-    socketRef.current.on("call-ended", () => {
-      endCall();
-    });
+      socketRef.current.on("answer", async ({ from, to, answer }) => {
+        const pc = peerConnectionRef.current;
+        if (pc) {
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+          setPeer([from, to]);
+        }
+      });
+
+      socketRef.current.on("icecandidate", async (candidate) => {
+        if (candidate && peerConnectionRef.current) {
+          try {
+            await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (err) {
+            console.error("ICE candidate error:", err);
+          }
+        }
+      });
+
+      socketRef.current.on("call-ended", () => {
+        endCall();
+      });
+
+      socketRef.current.on("user-left", (user) => {
+        if (peer.includes(user)) {
+          endCall();
+        }
+      });
+
+      socketRef.current.on("call-busy", () => {
+        alert("User is busy in another call.");
+      });
+    };
+
+    init();
 
     return () => {
-      socketRef.current.disconnect();
+      socketRef.current?.disconnect();
       endCall();
     };
   }, []);
@@ -68,40 +85,44 @@ export default function App() {
         localVideoRef.current.srcObject = stream;
       }
     } catch (err) {
-      console.error("getUserMedia error:", err);
+      console.error("Error accessing media devices:", err);
     }
   };
 
-  const getPeerConnection = () => {
-    if (!peerConnectionRef.current) {
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-      });
-
-      peerConnectionRef.current = pc;
-
-      pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          socketRef.current.emit("icecandidate", {
-            from: username,
-            to: peer[0] === username ? peer[1] : peer[0],
-            candidate: e.candidate,
-          });
-        }
-      };
-
-      pc.ontrack = (event) => {
-        const remoteStream = event.streams[0];
-        if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== remoteStream) {
-          remoteVideoRef.current.srcObject = remoteStream;
-        }
-      };
-
-      localStreamRef.current?.getTracks().forEach((track) => {
-        pc.addTrack(track, localStreamRef.current);
-      });
+  const createPeerConnection = (targetUser) => {
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.onicecandidate = null;
+      peerConnectionRef.current.ontrack = null;
+      peerConnectionRef.current.close();
     }
-    return peerConnectionRef.current;
+
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+
+    peerConnectionRef.current = pc;
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        socketRef.current.emit("icecandidate", {
+          from: username,
+          to: targetUser,
+          candidate: e.candidate,
+        });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+      }
+    };
+
+    localStreamRef.current?.getTracks().forEach((track) => {
+      pc.addTrack(track, localStreamRef.current);
+    });
+
+    return pc;
   };
 
   const joinUser = () => {
@@ -111,7 +132,8 @@ export default function App() {
   };
 
   const startCall = async (user) => {
-    const pc = getPeerConnection();
+    if (peerConnectionRef.current) return;
+    const pc = createPeerConnection(user);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     socketRef.current.emit("offer", {
@@ -124,13 +146,22 @@ export default function App() {
 
   const endCall = () => {
     if (peerConnectionRef.current) {
+      peerConnectionRef.current.onicecandidate = null;
+      peerConnectionRef.current.ontrack = null;
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
     }
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-    if (localVideoRef.current && localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
+
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
     }
+
+    if (localVideoRef.current && localStreamRef.current) {
+      if (!localVideoRef.current.srcObject) {
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
+    }
+
     setPeer([]);
   };
 
@@ -161,7 +192,11 @@ export default function App() {
               user !== username ? (
                 <li key={user} className="flex justify-between mb-2">
                   <span>{user}</span>
-                  <button onClick={() => startCall(user)} className="bg-green-600 px-3 py-1 rounded">
+                  <button
+                    onClick={() => startCall(user)}
+                    className="bg-green-600 px-3 py-1 rounded disabled:opacity-50"
+                    disabled={peer.length > 0}
+                  >
                     📞 Call
                   </button>
                 </li>
@@ -172,8 +207,19 @@ export default function App() {
           </ul>
 
           <div className="flex gap-4 w-full max-w-4xl">
-            <video ref={localVideoRef} autoPlay muted playsInline className="w-1/2 rounded bg-black" />
-            <video ref={remoteVideoRef} autoPlay playsInline className="w-1/2 rounded bg-black" />
+            <video
+              ref={localVideoRef}
+              autoPlay
+              muted
+              playsInline
+              className="w-1/2 rounded bg-black"
+            />
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className="w-1/2 rounded bg-black"
+            />
           </div>
 
           {peer.length > 0 && (
