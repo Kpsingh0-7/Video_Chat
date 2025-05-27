@@ -15,7 +15,7 @@ export default function App() {
   const endCallBtnRef = useRef();
 
   useEffect(() => {
-    socketRef.current = io("http://localhost:8080");
+    socketRef.current = io("https://viseo-chat.onrender.com");
 
     socketRef.current.on("joined", (users) => {
       setAllUsers(users);
