@@ -12,9 +12,12 @@ export default function App() {
   const localStreamRef = useRef();
   const localVideoRef = useRef();
   const remoteVideoRef = useRef();
-  const endCallBtnRef = useRef();
 
   useEffect(() => {
+    // Start local video first
+    startLocalVideo();
+
+    // Then setup socket
     socketRef.current = io("https://viseo-chat.onrender.com");
 
     socketRef.current.on("joined", (users) => {
@@ -51,13 +54,23 @@ export default function App() {
       endCall();
     });
 
-    startLocalVideo();
-
     return () => {
       socketRef.current.disconnect();
       endCall();
     };
   }, []);
+
+  const startLocalVideo = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStreamRef.current = stream;
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+    } catch (err) {
+      console.error("getUserMedia error:", err);
+    }
+  };
 
   const getPeerConnection = () => {
     if (!peerConnectionRef.current) {
@@ -78,8 +91,9 @@ export default function App() {
       };
 
       pc.ontrack = (event) => {
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = event.streams[0];
+        const remoteStream = event.streams[0];
+        if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== remoteStream) {
+          remoteVideoRef.current.srcObject = remoteStream;
         }
       };
 
@@ -88,18 +102,6 @@ export default function App() {
       });
     }
     return peerConnectionRef.current;
-  };
-
-  const startLocalVideo = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      localStreamRef.current = stream;
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-      }
-    } catch (err) {
-      console.error("getUserMedia error:", err);
-    }
   };
 
   const joinUser = () => {
@@ -126,7 +128,10 @@ export default function App() {
       peerConnectionRef.current = null;
     }
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-    if (endCallBtnRef.current) endCallBtnRef.current.style.display = "none";
+    if (localVideoRef.current && localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+    setPeer([]);
   };
 
   const handleEndCall = () => {
@@ -171,14 +176,14 @@ export default function App() {
             <video ref={remoteVideoRef} autoPlay playsInline className="w-1/2 rounded bg-black" />
           </div>
 
-          <button
-            ref={endCallBtnRef}
-            onClick={handleEndCall}
-            className="mt-4 bg-red-600 px-4 py-2 rounded hover:bg-red-700"
-            style={{ display: peer.length > 0 ? "block" : "none" }}
-          >
-            End Call
-          </button>
+          {peer.length > 0 && (
+            <button
+              onClick={handleEndCall}
+              className="mt-4 bg-red-600 px-4 py-2 rounded hover:bg-red-700"
+            >
+              End Call
+            </button>
+          )}
         </>
       )}
     </div>
