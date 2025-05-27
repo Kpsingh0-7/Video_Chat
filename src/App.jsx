@@ -17,7 +17,7 @@ export default function App() {
     const init = async () => {
       await startLocalVideo();
 
-      socketRef.current = io("http://localhost:8080");
+      socketRef.current = io("https://viseo-chat.onrender.com");
 
       socketRef.current.on("joined", (users) => {
         setAllUsers(users);
