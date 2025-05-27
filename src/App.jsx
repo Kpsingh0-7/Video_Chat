@@ -6,6 +6,8 @@ export default function App() {
   const [allUsers, setAllUsers] = useState({});
   const [joined, setJoined] = useState(false);
   const [peer, setPeer] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
 
   const socketRef = useRef();
   const peerConnectionRef = useRef(null);
@@ -15,8 +17,6 @@ export default function App() {
 
   useEffect(() => {
     const init = async () => {
-      
-
       socketRef.current = io("https://viseo-chat.onrender.com");
 
       socketRef.current.on("joined", (users) => {
@@ -47,7 +47,9 @@ export default function App() {
       socketRef.current.on("icecandidate", async (candidate) => {
         if (candidate && peerConnectionRef.current) {
           try {
-            await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+            await peerConnectionRef.current.addIceCandidate(
+              new RTCIceCandidate(candidate)
+            );
           } catch (err) {
             console.error("ICE candidate error:", err);
           }
@@ -67,6 +69,10 @@ export default function App() {
       socketRef.current.on("call-busy", () => {
         alert("User is busy in another call.");
       });
+
+      socketRef.current.on("chat-message", ({ from, message }) => {
+        setMessages((prev) => [...prev, { from, message }]);
+      });
     };
 
     init();
@@ -76,15 +82,19 @@ export default function App() {
       endCall();
     };
   }, []);
-useEffect(() => {
-  if (joined) {
-    startLocalVideo();
-  }
-}, [joined]);
+
+  useEffect(() => {
+    if (joined) {
+      startLocalVideo();
+    }
+  }, [joined]);
 
   const startLocalVideo = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
       localStreamRef.current = stream;
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
@@ -168,11 +178,25 @@ useEffect(() => {
     }
 
     setPeer([]);
+    setMessages([]);
   };
 
   const handleEndCall = () => {
     socketRef.current.emit("call-ended", peer);
     endCall();
+  };
+
+  const sendMessage = () => {
+    if (chatInput.trim() && peer.length > 0) {
+      const to = peer.find((u) => u !== username);
+      socketRef.current.emit("chat-message", {
+        from: username,
+        to,
+        message: chatInput,
+      });
+      setMessages((prev) => [...prev, { from: username, message: chatInput }]);
+      setChatInput("");
+    }
   };
 
   return (
@@ -185,7 +209,10 @@ useEffect(() => {
             placeholder="Enter username"
             className="p-2 mr-2 text-white rounded text-black"
           />
-          <button onClick={joinUser} className="bg-blue-600 px-4 py-2 rounded hover:bg-blue-700">
+          <button
+            onClick={joinUser}
+            className="bg-blue-600 px-4 py-2 rounded hover:bg-blue-700"
+          >
             Join
           </button>
         </div>
@@ -211,7 +238,7 @@ useEffect(() => {
             )}
           </ul>
 
-          <div className="flex gap-4 w-full max-w-4xl">
+          <div className="flex gap-4 w-full max-w-4xl mb-4">
             <video
               ref={localVideoRef}
               autoPlay
@@ -228,12 +255,45 @@ useEffect(() => {
           </div>
 
           {peer.length > 0 && (
-            <button
-              onClick={handleEndCall}
-              className="mt-4 bg-red-600 px-4 py-2 rounded hover:bg-red-700"
-            >
-              End Call
-            </button>
+            <>
+              <div className="w-full max-w-4xl mb-2">
+                <div className="bg-gray-800 p-4 rounded h-48 overflow-y-auto mb-2">
+                  {messages.map((msg, idx) => (
+                    <div
+                      key={idx}
+                      className={`${
+                        msg.from === username ? "text-right" : "text-left"
+                      }`}
+                    >
+                      <strong>{msg.from}: </strong>
+                      <span>{msg.message}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex">
+                  <input
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+                    className="flex-1 p-2 text-black rounded-l"
+                    placeholder="Type a message..."
+                  />
+                  <button
+                    onClick={sendMessage}
+                    className="bg-blue-600 px-4 py-2 rounded-r hover:bg-blue-700"
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+
+              <button
+                onClick={handleEndCall}
+                className="mt-2 bg-red-600 px-4 py-2 rounded hover:bg-red-700"
+              >
+                End Call
+              </button>
+            </>
           )}
         </>
       )}
