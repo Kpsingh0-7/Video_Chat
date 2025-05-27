@@ -15,7 +15,7 @@ export default function App() {
 
   useEffect(() => {
     const init = async () => {
-      await startLocalVideo();
+      
 
       socketRef.current = io("https://viseo-chat.onrender.com");
 
@@ -76,6 +76,11 @@ export default function App() {
       endCall();
     };
   }, []);
+useEffect(() => {
+  if (joined) {
+    startLocalVideo();
+  }
+}, [joined]);
 
   const startLocalVideo = async () => {
     try {
@@ -178,7 +183,7 @@ export default function App() {
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             placeholder="Enter username"
-            className="p-2 mr-2 rounded text-black"
+            className="p-2 mr-2 text-white rounded text-black"
           />
           <button onClick={joinUser} className="bg-blue-600 px-4 py-2 rounded hover:bg-blue-700">
             Join
