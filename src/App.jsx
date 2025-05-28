@@ -16,7 +16,7 @@ export default function App() {
 
   useEffect(() => {
     const init = async () => {
-      socketRef.current = io("http://localhost:8080");
+      socketRef.current = io("https://viseo-chat.onrender.com");
 
       socketRef.current.on("create-offer", async ({ to }) => {
         const pc = createPeerConnection(to);
