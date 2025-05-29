@@ -7,6 +7,7 @@ export default function App() {
   const [status, setStatus] = useState("Connecting...");
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState([]);
+  const [isPortraitVideo, setIsPortraitVideo] = useState(false);
 
   const socketRef = useRef(null);
   const localStreamRef = useRef(null);
@@ -125,8 +126,20 @@ export default function App() {
     };
 
     pc.ontrack = (event) => {
+      const stream = event.streams[0];
       if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0];
+        remoteVideoRef.current.srcObject = stream;
+
+        // Detect video orientation after metadata loads
+        const videoEl = remoteVideoRef.current;
+        const onLoadedMetadata = () => {
+          const isPortrait = videoEl.videoHeight > videoEl.videoWidth;
+          setIsPortraitVideo(isPortrait);
+        };
+
+        videoEl.addEventListener("loadedmetadata", onLoadedMetadata, {
+          once: true,
+        });
       }
     };
 
@@ -202,12 +215,13 @@ export default function App() {
     >
       {/* Remote Video - Fullscreen */}
       <video
-  ref={remoteVideoRef}
-  autoPlay
-  playsInline
-  className="absolute top-1/2 left-1/2 max-h-full max-w-full transform -translate-x-1/2 -translate-y-1/2 object-contain"
-/>
-
+        ref={remoteVideoRef}
+        autoPlay
+        playsInline
+        className={`absolute top-1/2 left-1/2 max-h-full max-w-full transform -translate-x-1/2 -translate-y-1/2 ${
+          isPortraitVideo ? "object-contain" : "object-cover"
+        }`}
+      />
 
       {/* Local Video - Corner or Top on mobile */}
       <video
