@@ -16,7 +16,7 @@ export default function App() {
 
   useEffect(() => {
     const init = async () => {
-      socketRef.current = io("https://viseo-chat.onrender.com");
+      socketRef.current = io("http://localhost:8080");
 
       socketRef.current.on("create-offer", async ({ to }) => {
         const pc = createPeerConnection(to);
@@ -202,11 +202,12 @@ export default function App() {
     >
       {/* Remote Video - Fullscreen */}
       <video
-        ref={remoteVideoRef}
-        autoPlay
-        playsInline
-        className="absolute top-0 left-0 w-full h-full object-cover"
-      />
+  ref={remoteVideoRef}
+  autoPlay
+  playsInline
+  className="absolute top-1/2 left-1/2 max-h-full max-w-full transform -translate-x-1/2 -translate-y-1/2 object-contain"
+/>
+
 
       {/* Local Video - Corner or Top on mobile */}
       <video
